@@ -7,31 +7,22 @@
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Load SQL.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
     
     <style>
-        /* Base Resets */
         body { 
             touch-action: manipulation; 
             -webkit-tap-highlight-color: transparent;
-            overscroll-behavior-y: none; /* Prevents pull-to-refresh on mobile */
+            overscroll-behavior-y: none;
         }
-        
-        /* Safe Area Spacing for iPhone X+ */
         .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
         .pt-safe { padding-top: env(safe-area-inset-top); }
-        
-        /* Dynamic viewport height fix */
         .h-dvh { height: 100vh; height: 100dvh; }
-
-        /* Fallback loading style if Tailwind fails */
         #error-log { font-family: monospace; color: #f87171; font-size: 12px; padding: 10px; display: none; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans h-dvh flex flex-col overflow-hidden">
 
-    <!-- Top Bar -->
     <header class="bg-gray-800 p-4 pt-safe shadow-md flex justify-between items-center z-10 shrink-0">
         <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack</h1>
         <div class="flex gap-2">
@@ -40,20 +31,15 @@
         </div>
     </header>
 
-    <!-- Error Log Area (Only shows if things break) -->
     <div id="error-log" class="bg-gray-800 border-b border-red-900"></div>
 
-    <!-- Main Content Area -->
     <main id="app-container" class="flex-1 overflow-y-auto relative w-full max-w-md mx-auto bg-gray-900">
-        <!-- Views injected here -->
         <div id="loading-view" class="flex flex-col items-center justify-center h-full text-gray-500">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
             <p>Initializing Database...</p>
-            <p class="text-xs mt-2 opacity-50">First load may take a few seconds.</p>
         </div>
     </main>
 
-    <!-- Bottom Navigation -->
     <nav class="bg-gray-800 border-t border-gray-700 flex justify-around p-2 pb-safe shrink-0 z-20">
         <button onclick="router.navigate('calendar')" class="nav-btn w-full text-gray-400 hover:text-emerald-400 flex flex-col items-center py-2">
             <i class="fas fa-calendar-alt text-xl mb-1"></i>
@@ -69,9 +55,7 @@
         </button>
     </nav>
 
-    <!-- Logic -->
     <script>
-    // Global Error Logger
     window.onerror = function(msg, url, line) {
         const errDiv = document.getElementById('error-log');
         errDiv.style.display = 'block';
@@ -84,11 +68,9 @@
         
         async init() {
             try {
-                // Initialize SQL.js
                 const sqlPromise = initSqlJs({
                     locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
                 });
-                
                 const dataPromise = this.loadFromIDB();
                 const [SQL, buf] = await Promise.all([sqlPromise, dataPromise]);
                 
@@ -96,25 +78,24 @@
                     this.db = new SQL.Database(new Uint8Array(buf));
                 } else {
                     this.db = new SQL.Database();
-                    this.initSchema();
-                    this.seedDemoData(); // Add demo data for new users
+                    this.seedDemoData();
                 }
+                
+                // FIX: Always run schema init to repair broken/old databases
+                this.initSchema(); 
                 
                 this.save();
                 document.getElementById('db-status').innerText = "Ready";
                 document.getElementById('db-status').className = "text-xs text-emerald-500 font-bold";
-                
-                // Initial Navigation
                 router.navigate('calendar');
 
             } catch (err) {
                 console.error(err);
                 document.getElementById('loading-view').innerHTML = `
                     <div class="text-red-500 p-8 text-center">
-                        <i class="fas fa-exclamation-triangle text-4xl mb-4"></i>
-                        <h3 class="font-bold">App Failed to Load</h3>
+                        <h3 class="font-bold">App Error</h3>
                         <p class="text-sm mt-2 mb-4 bg-gray-800 p-2 rounded text-left font-mono break-all">${err.message}</p>
-                        <button onclick="location.reload()" class="bg-emerald-600 text-white px-4 py-2 rounded">Retry</button>
+                        <button onclick="DB.nuke()" class="bg-red-600 text-white px-4 py-2 rounded">Reset Everything</button>
                     </div>
                 `;
             }
@@ -131,32 +112,14 @@
         },
 
         seedDemoData() {
-            // Check if we have templates, if not, create some
-            const t = this.query("SELECT count(*) as c FROM templates")[0].c;
-            if(t > 0) return;
-
-            console.log("Seeding Demo Data...");
-            
-            // 1. Create a "Full Body" Template
-            this.run("INSERT INTO templates (name) VALUES ('Full Body A')");
-            const tid = this.query("SELECT last_insert_rowid() as id")[0].id;
-            this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Squat', 1)", [tid]);
-            this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Bench Press', 2)", [tid]);
-            this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Row', 3)", [tid]);
-
-            // 2. Create a workout for TODAY
-            const today = new Date().toISOString().split('T')[0];
-            this.run("INSERT INTO workouts (date, name, status) VALUES (?, 'Full Body A', 'planned')", [today]);
-            const wid = this.query("SELECT last_insert_rowid() as id")[0].id;
-            
-            // Add exercises to today's workout
-            this.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, 'Squat', 1)", [wid]);
-            this.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, 'Bench Press', 2)", [wid]);
-            
-            // Add some sets
-            const exId = this.query("SELECT last_insert_rowid() as id")[0].id; // Bench press ID
-            this.run("INSERT INTO sets (exercise_id, reps, weight, completed) VALUES (?, 10, 60, 0)", [exId]);
-            this.run("INSERT INTO sets (exercise_id, reps, weight, completed) VALUES (?, 10, 60, 0)", [exId]);
+            // Only runs if NEW database
+            try {
+                this.initSchema(); // Ensure tables exist before seeding
+                this.run("INSERT INTO templates (name) VALUES ('Full Body A')");
+                const tid = this.query("SELECT last_insert_rowid() as id")[0].id;
+                this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Squat', 1)", [tid]);
+                this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Bench Press', 2)", [tid]);
+            } catch(e) { console.log("Seeding skipped", e); }
         },
 
         exec(sql, params=[]) {
@@ -205,7 +168,7 @@
         },
 
         nuke() {
-            if(confirm("Reset entire app? All data will be lost.")) {
+            if(confirm("RESET APP? All history will be deleted.")) {
                 indexedDB.deleteDatabase("FitTrackDB");
                 location.reload();
             }
@@ -227,123 +190,39 @@
             let html = `
                 <div class="p-4">
                     <h2 class="text-2xl font-bold mb-6 text-center text-emerald-400 tracking-wide">${now.toLocaleString('default', { month: 'long' })} ${year}</h2>
-                    
-                    <div class="grid grid-cols-7 gap-2 mb-2 text-center text-gray-500 text-xs font-bold uppercase">
-                        <div>S</div><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div>
-                    </div>
-                    
+                    <div class="grid grid-cols-7 gap-2 mb-2 text-center text-gray-500 text-xs font-bold uppercase"><div>S</div><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div></div>
                     <div class="grid grid-cols-7 gap-2">
             `;
-
             for (let i = 0; i < firstDay; i++) html += `<div></div>`;
-
             for (let d = 1; d <= daysInMonth; d++) {
                 const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
                 const workout = workoutMap[dateStr];
-                
-                // Styling logic
                 let bg = 'bg-gray-800 border-gray-700';
                 let indicator = '';
-                
                 if (workout) {
-                    if(workout.status === 'done') {
-                        bg = 'bg-emerald-900 border-emerald-700';
-                        indicator = '<div class="absolute bottom-1 right-1 text-emerald-400 text-[10px]"><i class="fas fa-check"></i></div>';
-                    } else {
-                        bg = 'bg-gray-700 border-yellow-700';
-                        indicator = '<div class="absolute bottom-1 right-1 text-yellow-500 text-[10px]"><i class="fas fa-clock"></i></div>';
-                    }
+                    if(workout.status === 'done') { bg = 'bg-emerald-900 border-emerald-700'; indicator = '<div class="absolute bottom-1 right-1 text-emerald-400 text-[10px]"><i class="fas fa-check"></i></div>'; }
+                    else { bg = 'bg-gray-700 border-yellow-700'; indicator = '<div class="absolute bottom-1 right-1 text-yellow-500 text-[10px]"><i class="fas fa-clock"></i></div>'; }
                 }
-
-                // Highlight today
                 const isToday = (d === now.getDate());
                 const todayBorder = isToday ? 'border-2 border-emerald-400' : 'border';
-
-                html += `
-                    <div onclick="router.openDay('${dateStr}')" 
-                         class="aspect-square flex flex-col items-center justify-center rounded-xl cursor-pointer hover:opacity-80 transition relative ${bg} ${todayBorder}">
-                        <span class="font-bold text-sm ${isToday ? 'text-white' : 'text-gray-300'}">${d}</span>
-                        ${indicator}
-                    </div>
-                `;
+                html += `<div onclick="router.openDay('${dateStr}')" class="aspect-square flex flex-col items-center justify-center rounded-xl cursor-pointer hover:opacity-80 transition relative ${bg} ${todayBorder}"><span class="font-bold text-sm ${isToday ? 'text-white' : 'text-gray-300'}">${d}</span>${indicator}</div>`;
             }
-            html += `</div>
-                <div class="mt-8 text-center text-gray-500 text-sm">Tap a day to log or plan</div>
-            </div>`;
+            html += `</div><div class="mt-8 text-center text-gray-500 text-sm">Tap a day to log or plan</div></div>`;
             return html;
         },
 
         dayView: (dateStr) => {
             const workout = DB.query("SELECT * FROM workouts WHERE date = ?", [dateStr])[0];
             const templates = DB.query("SELECT * FROM templates");
-            
-            let html = `
-                <div class="p-4 min-h-full flex flex-col">
-                    <div class="flex items-center gap-4 mb-6">
-                        <button onclick="router.navigate('calendar')" class="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 hover:text-white transition">
-                            <i class="fas fa-arrow-left"></i>
-                        </button>
-                        <h2 class="text-2xl font-bold text-white">${dateStr}</h2>
-                    </div>
-            `;
+            let html = `<div class="p-4 min-h-full flex flex-col"><div class="flex items-center gap-4 mb-6"><button onclick="router.navigate('calendar')" class="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 hover:text-white transition"><i class="fas fa-arrow-left"></i></button><h2 class="text-2xl font-bold text-white">${dateStr}</h2></div>`;
 
             if (workout) {
                 const exercises = DB.query("SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY ordering", [workout.id]);
                 const isDone = workout.status === 'done';
-                
-                html += `
-                    <div class="bg-gray-800 rounded-2xl p-5 border border-gray-700 shadow-xl">
-                        <div class="flex justify-between items-start mb-6">
-                            <div>
-                                <h3 class="text-xl font-bold text-emerald-400">${workout.name}</h3>
-                                <div class="text-gray-500 text-xs uppercase mt-1 tracking-wider">${workout.status}</div>
-                            </div>
-                            <button onclick="Actions.deleteWorkout(${workout.id})" class="text-gray-500 hover:text-red-400"><i class="fas fa-trash"></i></button>
-                        </div>
-                        
-                        ${!isDone ? `<button onclick="Actions.startWorkout(${workout.id})" class="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white py-4 rounded-xl font-bold shadow-lg mb-6 transform transition active:scale-95">START WORKOUT</button>` : ''}
-                        
-                        <div class="space-y-3 mb-6">
-                            ${exercises.map(ex => `
-                                <div class="flex items-center p-3 bg-gray-900/50 rounded-lg border border-gray-700/50">
-                                    <div class="w-8 h-8 rounded bg-gray-800 flex items-center justify-center mr-3 text-emerald-500"><i class="fas fa-dumbbell"></i></div>
-                                    <span class="font-medium text-gray-300">${ex.name}</span>
-                                </div>
-                            `).join('')}
-                        </div>
-
-                         ${isDone ? `<button onclick="Actions.resumeWorkout(${workout.id})" class="w-full bg-gray-700 py-3 rounded-xl font-medium text-emerald-400">View Logs</button>` : ''}
-                    </div>
-                `;
+                html += `<div class="bg-gray-800 rounded-2xl p-5 border border-gray-700 shadow-xl"><div class="flex justify-between items-start mb-6"><div><h3 class="text-xl font-bold text-emerald-400">${workout.name}</h3><div class="text-gray-500 text-xs uppercase mt-1 tracking-wider">${workout.status}</div></div><button onclick="Actions.deleteWorkout(${workout.id})" class="text-gray-500 hover:text-red-400"><i class="fas fa-trash"></i></button></div>${!isDone ? `<button onclick="Actions.startWorkout(${workout.id})" class="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white py-4 rounded-xl font-bold shadow-lg mb-6 transform transition active:scale-95">START WORKOUT</button>` : ''}<div class="space-y-3 mb-6">${exercises.map(ex => `<div class="flex items-center p-3 bg-gray-900/50 rounded-lg border border-gray-700/50"><div class="w-8 h-8 rounded bg-gray-800 flex items-center justify-center mr-3 text-emerald-500"><i class="fas fa-dumbbell"></i></div><span class="font-medium text-gray-300">${ex.name}</span></div>`).join('')}</div>${isDone ? `<button onclick="Actions.resumeWorkout(${workout.id})" class="w-full bg-gray-700 py-3 rounded-xl font-medium text-emerald-400">View Logs</button>` : ''}</div>`;
             } else {
-                html += `
-                    <div class="flex-1 flex flex-col items-center justify-center py-10 opacity-50">
-                        <i class="fas fa-bed text-5xl mb-4 text-gray-600"></i>
-                        <p class="text-gray-400 font-medium">No workout planned</p>
-                    </div>
-                    
-                    <div class="mt-auto">
-                        <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">Quick Add from Template</h3>
-                        <div class="space-y-3">
-                            ${templates.map(t => `
-                                <button onclick="Actions.assignTemplate('${dateStr}', ${t.id})" 
-                                    class="w-full p-4 bg-gray-800 border border-gray-700 rounded-xl text-left flex justify-between items-center hover:bg-gray-750 active:bg-gray-700 transition group">
-                                    <span class="font-bold text-gray-200">${t.name}</span>
-                                    <div class="w-8 h-8 rounded-full bg-gray-900 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition">
-                                        <i class="fas fa-plus"></i>
-                                    </div>
-                                </button>
-                            `).join('')}
-                        </div>
-                        ${templates.length === 0 ? `
-                            <button onclick="router.navigate('templates')" class="w-full py-4 border-2 border-dashed border-gray-700 rounded-xl text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 transition">
-                                Create your first Template
-                            </button>
-                        ` : ''}
-                    </div>
-                `;
+                html += `<div class="flex-1 flex flex-col items-center justify-center py-10 opacity-50"><i class="fas fa-bed text-5xl mb-4 text-gray-600"></i><p class="text-gray-400 font-medium">No workout planned</p></div><div class="mt-auto"><h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">Quick Add from Template</h3><div class="space-y-3">${templates.map(t => `<button onclick="Actions.assignTemplate('${dateStr}', ${t.id})" class="w-full p-4 bg-gray-800 border border-gray-700 rounded-xl text-left flex justify-between items-center hover:bg-gray-750 active:bg-gray-700 transition group"><span class="font-bold text-gray-200">${t.name}</span><div class="w-8 h-8 rounded-full bg-gray-900 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition"><i class="fas fa-plus"></i></div></button>`).join('')}</div>${templates.length === 0 ? `<button onclick="router.navigate('templates')" class="w-full py-4 border-2 border-dashed border-gray-700 rounded-xl text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 transition">Create your first Template</button>` : ''}</div>`;
             }
-
             html += `</div>`;
             return html;
         },
@@ -351,92 +230,23 @@
         activeWorkout: (workoutId) => {
             const workout = DB.query("SELECT * FROM workouts WHERE id = ?", [workoutId])[0];
             const exercises = DB.query("SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY ordering", [workoutId]);
-
-            let html = `
-                <div class="p-4 pb-32">
-                    <div class="flex justify-between items-center mb-6 sticky top-0 bg-gray-900 z-10 py-2 border-b border-gray-800">
-                        <h2 class="text-lg font-bold text-white truncate max-w-[60%]">${workout.name}</h2>
-                        <button onclick="Actions.finishWorkout(${workoutId})" class="bg-emerald-500 text-white px-5 py-2 rounded-full font-bold shadow-lg shadow-emerald-500/20 text-sm">FINISH</button>
-                    </div>
-            `;
-
+            let html = `<div class="p-4 pb-32"><div class="flex justify-between items-center mb-6 sticky top-0 bg-gray-900 z-10 py-2 border-b border-gray-800"><h2 class="text-lg font-bold text-white truncate max-w-[60%]">${workout.name}</h2><button onclick="Actions.finishWorkout(${workoutId})" class="bg-emerald-500 text-white px-5 py-2 rounded-full font-bold shadow-lg shadow-emerald-500/20 text-sm">FINISH</button></div>`;
             exercises.forEach(ex => {
                 const sets = DB.query("SELECT * FROM sets WHERE exercise_id = ?", [ex.id]);
-                html += `
-                    <div class="bg-gray-800 rounded-2xl p-4 mb-4 border border-gray-700/50 overflow-hidden">
-                        <div class="flex justify-between items-center mb-3">
-                            <h3 class="font-bold text-emerald-400 text-lg">${ex.name}</h3>
-                            <button onclick="Actions.addSet(${ex.id})" class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded-lg transition text-white font-medium">+ Set</button>
-                        </div>
-                        
-                        <div class="space-y-1">
-                            ${sets.length > 0 ? `
-                                <div class="grid grid-cols-10 text-[10px] text-gray-500 uppercase tracking-wider text-center mb-2 px-1">
-                                    <div class="col-span-1">#</div>
-                                    <div class="col-span-3">KG</div>
-                                    <div class="col-span-3">Reps</div>
-                                    <div class="col-span-3">Check</div>
-                                </div>
-                            ` : ''}
-                            
-                            ${sets.map((set, idx) => `
-                                <div class="grid grid-cols-10 gap-2 items-center mb-2">
-                                    <div class="col-span-1 text-center text-gray-500 font-bold text-sm">${idx + 1}</div>
-                                    <div class="col-span-3">
-                                        <input type="number" value="${set.weight}" onchange="Actions.updateSet(${set.id}, 'weight', this.value)" class="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 text-center text-white font-bold text-sm focus:border-emerald-500 focus:outline-none transition">
-                                    </div>
-                                    <div class="col-span-3">
-                                        <input type="tel" value="${set.reps}" onchange="Actions.updateSet(${set.id}, 'reps', this.value)" class="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 text-center text-white font-bold text-sm focus:border-emerald-500 focus:outline-none transition">
-                                    </div>
-                                    <div class="col-span-3 flex justify-end">
-                                        <button onclick="Actions.toggleSet(${set.id}, ${set.completed})" 
-                                            class="w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm ${set.completed ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}">
-                                            <i class="fas fa-check"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `;
+                html += `<div class="bg-gray-800 rounded-2xl p-4 mb-4 border border-gray-700/50 overflow-hidden"><div class="flex justify-between items-center mb-3"><h3 class="font-bold text-emerald-400 text-lg">${ex.name}</h3><button onclick="Actions.addSet(${ex.id})" class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded-lg transition text-white font-medium">+ Set</button></div><div class="space-y-1">${sets.length > 0 ? `<div class="grid grid-cols-10 text-[10px] text-gray-500 uppercase tracking-wider text-center mb-2 px-1"><div class="col-span-1">#</div><div class="col-span-3">KG</div><div class="col-span-3">Reps</div><div class="col-span-3">Check</div></div>` : ''}${sets.map((set, idx) => `<div class="grid grid-cols-10 gap-2 items-center mb-2"><div class="col-span-1 text-center text-gray-500 font-bold text-sm">${idx + 1}</div><div class="col-span-3"><input type="number" value="${set.weight}" onchange="Actions.updateSet(${set.id}, 'weight', this.value)" class="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 text-center text-white font-bold text-sm focus:border-emerald-500 focus:outline-none transition"></div><div class="col-span-3"><input type="tel" value="${set.reps}" onchange="Actions.updateSet(${set.id}, 'reps', this.value)" class="w-full bg-gray-900 border border-gray-700 rounded-lg py-2 text-center text-white font-bold text-sm focus:border-emerald-500 focus:outline-none transition"></div><div class="col-span-3 flex justify-end"><button onclick="Actions.toggleSet(${set.id}, ${set.completed})" class="w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm ${set.completed ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}"><i class="fas fa-check"></i></button></div></div>`).join('')}</div></div>`;
             });
-
-            html += `
-                <button onclick="Actions.addExerciseToWorkout(${workoutId})" class="w-full py-4 border-2 border-dashed border-gray-700 text-gray-400 rounded-xl hover:text-white hover:border-gray-500 transition font-medium">
-                    <i class="fas fa-plus mr-2"></i> Add Exercise
-                </button>
-            </div>`;
+            html += `<button onclick="Actions.addExerciseToWorkout(${workoutId})" class="w-full py-4 border-2 border-dashed border-gray-700 text-gray-400 rounded-xl hover:text-white hover:border-gray-500 transition font-medium"><i class="fas fa-plus mr-2"></i> Add Exercise</button></div>`;
             return html;
         },
 
         templates: () => {
             const templates = DB.query("SELECT * FROM templates");
-            let html = `
-                <div class="p-4">
-                    <div class="flex justify-between items-center mb-8">
-                        <h2 class="text-2xl font-bold text-white">My Templates</h2>
-                        <button onclick="Actions.createTemplate()" class="bg-emerald-500 w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg shadow-emerald-500/20 hover:scale-105 transition"><i class="fas fa-plus"></i></button>
-                    </div>
-                    <div class="grid gap-4">
-            `;
-            
+            let html = `<div class="p-4"><div class="flex justify-between items-center mb-8"><h2 class="text-2xl font-bold text-white">My Templates</h2><button onclick="Actions.createTemplate()" class="bg-emerald-500 w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg shadow-emerald-500/20 hover:scale-105 transition"><i class="fas fa-plus"></i></button></div><div class="grid gap-4">`;
             templates.forEach(t => {
                 const count = DB.query("SELECT COUNT(*) as c FROM template_exercises WHERE template_id=?", [t.id])[0].c;
-                html += `
-                    <div class="bg-gray-800 p-5 rounded-2xl flex justify-between items-center border border-gray-700 shadow-md">
-                        <div>
-                            <div class="font-bold text-lg text-white mb-1">${t.name}</div>
-                            <div class="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded inline-block">${count} Exercises</div>
-                        </div>
-                        <button onclick="Actions.editTemplate(${t.id})" class="w-10 h-10 rounded-full bg-gray-700 text-emerald-400 hover:bg-gray-600 flex items-center justify-center transition"><i class="fas fa-pen"></i></button>
-                    </div>
-                `;
+                html += `<div class="bg-gray-800 p-5 rounded-2xl flex justify-between items-center border border-gray-700 shadow-md"><div><div class="font-bold text-lg text-white mb-1">${t.name}</div><div class="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded inline-block">${count} Exercises</div></div><button onclick="Actions.editTemplate(${t.id})" class="w-10 h-10 rounded-full bg-gray-700 text-emerald-400 hover:bg-gray-600 flex items-center justify-center transition"><i class="fas fa-pen"></i></button></div>`;
             });
-            
-            if(templates.length === 0) {
-                 html += `<div class="text-center text-gray-500 mt-10">No templates found.<br>Click + to create one.</div>`;
-            }
-            
+            if(templates.length === 0) html += `<div class="text-center text-gray-500 mt-10">No templates found.<br>Click + to create one.</div>`;
             html += `</div></div>`;
             return html;
         },
@@ -444,62 +254,17 @@
         editTemplate: (id) => {
             const t = DB.query("SELECT * FROM templates WHERE id = ?", [id])[0];
             const exercises = DB.query("SELECT * FROM template_exercises WHERE template_id = ? ORDER BY ordering", [id]);
-            
-            let html = `
-                <div class="p-4">
-                    <button onclick="router.navigate('templates')" class="mb-6 text-gray-400 flex items-center hover:text-white"><i class="fas fa-arrow-left mr-2"></i> Back</button>
-                    
-                    <div class="mb-8">
-                        <label class="text-xs text-gray-500 uppercase font-bold tracking-wider">Template Name</label>
-                        <input id="tmpl-name-input" value="${t.name}" onchange="DB.run('UPDATE templates SET name=? WHERE id=?', [this.value, ${id}])" 
-                            class="w-full bg-transparent text-3xl font-bold border-b border-gray-700 py-2 text-white focus:outline-none focus:border-emerald-500 transition">
-                    </div>
-                    
-                    <div class="space-y-3 mb-6">
-                        ${exercises.map(ex => `
-                            <div class="bg-gray-800 p-4 rounded-xl flex justify-between items-center border border-gray-700 group">
-                                <span class="font-medium text-gray-200">${ex.name}</span>
-                                <button onclick="Actions.deleteTemplateExercise(${ex.id}, ${id})" class="text-gray-600 hover:text-red-400 transition"><i class="fas fa-trash"></i></button>
-                            </div>
-                        `).join('')}
-                    </div>
-
-                    <form onsubmit="event.preventDefault(); Actions.addTemplateExercise(${id}, this.exName.value); this.exName.value='';" class="flex gap-3 mb-10">
-                        <input name="exName" placeholder="Add Exercise..." class="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-white focus:outline-none border border-gray-700 focus:border-emerald-500 transition">
-                        <button type="submit" class="bg-emerald-600 px-5 rounded-xl text-white font-bold hover:bg-emerald-500 transition"><i class="fas fa-plus"></i></button>
-                    </form>
-                    
-                    <button onclick="Actions.deleteTemplate(${id})" class="w-full py-4 text-red-500 text-sm font-medium hover:bg-red-900/20 rounded-xl transition">Delete Template</button>
-                </div>
-            `;
+            let html = `<div class="p-4"><button onclick="router.navigate('templates')" class="mb-6 text-gray-400 flex items-center hover:text-white"><i class="fas fa-arrow-left mr-2"></i> Back</button><div class="mb-8"><label class="text-xs text-gray-500 uppercase font-bold tracking-wider">Template Name</label><input id="tmpl-name-input" value="${t.name}" onchange="DB.run('UPDATE templates SET name=? WHERE id=?', [this.value, ${id}])" class="w-full bg-transparent text-3xl font-bold border-b border-gray-700 py-2 text-white focus:outline-none focus:border-emerald-500 transition"></div><div class="space-y-3 mb-6">${exercises.map(ex => `<div class="bg-gray-800 p-4 rounded-xl flex justify-between items-center border border-gray-700 group"><span class="font-medium text-gray-200">${ex.name}</span><button onclick="Actions.deleteTemplateExercise(${ex.id}, ${id})" class="text-gray-600 hover:text-red-400 transition"><i class="fas fa-trash"></i></button></div>`).join('')}</div><form onsubmit="event.preventDefault(); Actions.addTemplateExercise(${id}, this.exName.value); this.exName.value='';" class="flex gap-3 mb-10"><input name="exName" placeholder="Add Exercise..." class="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-white focus:outline-none border border-gray-700 focus:border-emerald-500 transition"><button type="submit" class="bg-emerald-600 px-5 rounded-xl text-white font-bold hover:bg-emerald-500 transition"><i class="fas fa-plus"></i></button></form><button onclick="Actions.deleteTemplate(${id})" class="w-full py-4 text-red-500 text-sm font-medium hover:bg-red-900/20 rounded-xl transition">Delete Template</button></div>`;
             return html;
         },
         
         stats: () => {
-             // Basic Stats
              const totalWorkouts = DB.query("SELECT COUNT(*) as c FROM workouts WHERE status='done'")[0].c;
              const totalSets = DB.query("SELECT COUNT(*) as c FROM sets WHERE completed=1")[0].c;
-             
-             return `
-                <div class="p-6">
-                    <h2 class="text-2xl font-bold mb-6">Your Stats</h2>
-                    <div class="grid grid-cols-2 gap-4 mb-6">
-                        <div class="bg-gray-800 p-4 rounded-2xl border border-gray-700 text-center">
-                            <div class="text-3xl font-bold text-emerald-400 mb-1">${totalWorkouts}</div>
-                            <div class="text-xs text-gray-500 uppercase">Workouts Done</div>
-                        </div>
-                        <div class="bg-gray-800 p-4 rounded-2xl border border-gray-700 text-center">
-                            <div class="text-3xl font-bold text-blue-400 mb-1">${totalSets}</div>
-                            <div class="text-xs text-gray-500 uppercase">Sets Completed</div>
-                        </div>
-                    </div>
-                    <div class="text-center text-gray-500 text-sm">More charts coming soon!</div>
-                </div>
-             `;
+             return `<div class="p-6"><h2 class="text-2xl font-bold mb-6">Your Stats</h2><div class="grid grid-cols-2 gap-4 mb-6"><div class="bg-gray-800 p-4 rounded-2xl border border-gray-700 text-center"><div class="text-3xl font-bold text-emerald-400 mb-1">${totalWorkouts}</div><div class="text-xs text-gray-500 uppercase">Workouts Done</div></div><div class="bg-gray-800 p-4 rounded-2xl border border-gray-700 text-center"><div class="text-3xl font-bold text-blue-400 mb-1">${totalSets}</div><div class="text-xs text-gray-500 uppercase">Sets Completed</div></div></div></div>`;
         }
     };
 
-    // --- Actions & Router (Same logic, just linked to new UI) ---
     const Actions = {
         assignTemplate: (date, tmplId) => {
             const t = DB.query("SELECT * FROM templates WHERE id = ?", [tmplId])[0];
@@ -512,7 +277,13 @@
         startWorkout: (id) => { DB.run("UPDATE workouts SET status = 'in_progress' WHERE id = ?", [id]); router.navigate('active', id); },
         resumeWorkout: (id) => { router.navigate('active', id); },
         finishWorkout: (id) => { DB.run("UPDATE workouts SET status = 'done' WHERE id = ?", [id]); router.navigate('calendar'); },
-        createTemplate: () => { DB.run("INSERT INTO templates (name) VALUES ('New Routine')"); const id = DB.query("SELECT last_insert_rowid() as id")[0].id; router.navigate('editTemplate', id); },
+        createTemplate: () => { 
+            try {
+                DB.run("INSERT INTO templates (name) VALUES ('New Routine')"); 
+                const res = DB.query("SELECT last_insert_rowid() as id");
+                if(res.length > 0) router.navigate('editTemplate', res[0].id);
+            } catch(e) { alert("Error creating template: " + e); }
+        },
         addTemplateExercise: (tid, name) => { if(!name) return; DB.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, ?, 0)", [tid, name]); router.navigate('editTemplate', tid); },
         deleteTemplateExercise: (eid, tid) => { DB.run("DELETE FROM template_exercises WHERE id=?", [eid]); router.navigate('editTemplate', tid); },
         deleteTemplate: (id) => { if(confirm("Delete template?")) { DB.run("DELETE FROM templates WHERE id=?", [id]); DB.run("DELETE FROM template_exercises WHERE template_id=?", [id]); router.navigate('templates'); } },
@@ -521,15 +292,9 @@
         toggleSet: (setId, current) => { 
             const newVal = current ? 0 : 1;
             DB.run("UPDATE sets SET completed = ? WHERE id = ?", [newVal, setId]);
-            // Optimistic UI update - find the button and toggle class/onclick immediately
             const btn = event.currentTarget;
-            if(newVal) {
-                 btn.className = "w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm bg-emerald-500 text-white";
-                 btn.onclick = () => Actions.toggleSet(setId, 1);
-            } else {
-                 btn.className = "w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm bg-gray-700 text-gray-400 hover:bg-gray-600";
-                 btn.onclick = () => Actions.toggleSet(setId, 0);
-            }
+            if(newVal) { btn.className = "w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm bg-emerald-500 text-white"; btn.onclick = () => Actions.toggleSet(setId, 1); } 
+            else { btn.className = "w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm bg-gray-700 text-gray-400 hover:bg-gray-600"; btn.onclick = () => Actions.toggleSet(setId, 0); }
         },
         addExerciseToWorkout: (wid) => { const name = prompt("Exercise Name:"); if(name) { DB.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, ?, 99)", [wid, name]); router.navigate('active', wid); } },
         deleteWorkout: (id) => { if(confirm("Delete this plan?")) { DB.run("DELETE FROM workouts WHERE id=?", [id]); DB.run("DELETE FROM workout_exercises WHERE workout_id=?", [id]); router.navigate('calendar'); } }
@@ -549,13 +314,8 @@
         openDay: (dateStr) => { router.container.innerHTML = Views.dayView(dateStr); }
     };
 
-    // Start App
     DB.init();
-
-    // Register SW (only if needed)
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('./sw.js').catch(console.error);
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.error);
     </script>
 </body>
 </html>
