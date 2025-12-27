@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SQLite FitTrack</title>
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <style>
+        body { touch-action: manipulation; }
+        .tap-highlight-transparent { -webkit-tap-highlight-color: transparent; }
+        /* Custom scrollbar for dark mode */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans h-screen flex flex-col overflow-hidden">
+
+    <!-- Top Bar -->
+    <header class="bg-gray-800 p-4 shadow-md flex justify-between items-center z-10">
+        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack</h1>
+        <div id="db-status" class="text-xs text-gray-500">Loading DB...</div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="app-container" class="flex-1 overflow-y-auto p-4 relative">
+        <!-- Views will be injected here -->
+        <div id="loading-view" class="flex items-center justify-center h-full">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+        </div>
+    </main>
+
+    <!-- Bottom Navigation -->
+    <nav class="bg-gray-800 border-t border-gray-700 flex justify-around p-3 pb-safe">
+        <button onclick="router.navigate('calendar')" class="nav-btn text-gray-400 hover:text-emerald-400 flex flex-col items-center">
+            <i class="fas fa-calendar-alt text-xl mb-1"></i>
+            <span class="text-xs">Calendar</span>
+        </button>
+        <button onclick="router.navigate('templates')" class="nav-btn text-gray-400 hover:text-emerald-400 flex flex-col items-center">
+            <i class="fas fa-clipboard-list text-xl mb-1"></i>
+            <span class="text-xs">Templates</span>
+        </button>
+        <button onclick="router.navigate('stats')" class="nav-btn text-gray-400 hover:text-emerald-400 flex flex-col items-center">
+            <i class="fas fa-chart-line text-xl mb-1"></i>
+            <span class="text-xs">Stats</span>
+        </button>
+    </nav>
+
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js')
+                .then(() => console.log('SW Registered'))
+                .catch(err => console.log('SW Fail', err));
+        }
+    </script>
+
+    <!-- App Logic -->
+    <script>
+    // --- Database Layer (SQLite + IndexedDB Persistence) ---
+    const DB = {
+        db: null,
+        
+        async init() {
+            const sqlPromise = initSqlJs({
+                locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+            });
+            const dataPromise = this.loadFromIDB();
+            const [SQL, buf] = await Promise.all([sqlPromise, dataPromise]);
+            
+            if (buf) {
+                this.db = new SQL.Database(new Uint8Array(buf));
+            } else {
+                this.db = new SQL.Database();
+                this.initSchema();
+            }
+            this.save(); // Initial save to ensure IDB entry exists
+            document.getElementById('db-status').innerText = "SQLite Ready";
+        },
+
+        initSchema() {
+            this.db.run(`
+                CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY, name TEXT);
+                CREATE TABLE IF NOT EXISTS template_exercises (id INTEGER PRIMARY KEY, template_id INTEGER, name TEXT, ordering INTEGER);
+                CREATE TABLE IF NOT EXISTS workouts (id INTEGER PRIMARY KEY, date TEXT, name TEXT, status TEXT, notes TEXT); 
+                CREATE TABLE IF NOT EXISTS workout_exercises (id INTEGER PRIMARY KEY, workout_id INTEGER, name TEXT, ordering INTEGER);
+                CREATE TABLE IF NOT EXISTS sets (id INTEGER PRIMARY KEY, exercise_id INTEGER, reps INTEGER, weight REAL, completed INTEGER DEFAULT 0);
+            `);
+        },
+
+        exec(sql, params=[]) {
+            const res = this.db.exec(sql, params);
+            this.save(); // Auto-save on every write
+            return res;
+        },
+
+        run(sql, params=[]) {
+            this.db.run(sql, params);
+            this.save();
+        },
+
+        query(sql, params=[]) {
+            const res = this.db.exec(sql, params);
+            if (!res.length) return [];
+            const columns = res[0].columns;
+            return res[0].values.map(row => {
+                let obj = {};
+                columns.forEach((col, i) => obj[col] = row[i]);
+                return obj;
+            });
+        },
+
+        save() {
+            const data = this.db.export();
+            const request = indexedDB.open("FitTrackDB", 1);
+            request.onupgradeneeded = e => e.target.result.createObjectStore("store");
+            request.onsuccess = e => {
+                const tx = e.target.result.transaction("store", "readwrite");
+                tx.objectStore("store").put(data, "sqlite_dump");
+            };
+        },
+
+        async loadFromIDB() {
+            return new Promise((resolve) => {
+                const request = indexedDB.open("FitTrackDB", 1);
+                request.onupgradeneeded = e => e.target.result.createObjectStore("store");
+                request.onsuccess = e => {
+                    const tx = e.target.result.transaction("store", "readonly");
+                    const getReq = tx.objectStore("store").get("sqlite_dump");
+                    getReq.onsuccess = () => resolve(getReq.result);
+                    getReq.onerror = () => resolve(null);
+                };
+                request.onerror = () => resolve(null);
+            });
+        }
+    };
+
+    // --- Components ---
+
+    const Views = {
+        calendar: () => {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = now.getMonth(); // 0-indexed
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const firstDay = new Date(year, month, 1).getDay();
+
+            // Fetch data
+            const workouts = DB.query(`SELECT * FROM workouts WHERE date LIKE ?`, [`${year}-${String(month+1).padStart(2,'0')}%`]);
+            const workoutMap = {};
+            workouts.forEach(w => workoutMap[w.date] = w);
+
+            let html = `
+                <div class="p-2">
+                    <h2 class="text-2xl font-bold mb-4 text-center">${now.toLocaleString('default', { month: 'long' })} ${year}</h2>
+                    <div class="grid grid-cols-7 gap-2 mb-2 text-center text-gray-400 text-sm">
+                        <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                    </div>
+                    <div class="grid grid-cols-7 gap-2">
+            `;
+
+            for (let i = 0; i < firstDay; i++) html += `<div></div>`;
+
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const workout = workoutMap[dateStr];
+                let statusColor = 'bg-gray-800';
+                if (workout) statusColor = workout.status === 'done' ? 'bg-emerald-600' : 'bg-yellow-600';
+                
+                html += `
+                    <div onclick="router.openDay('${dateStr}')" 
+                         class="aspect-square flex items-center justify-center rounded-lg cursor-pointer hover:opacity-80 transition ${statusColor} relative">
+                        <span class="font-bold">${d}</span>
+                        ${workout ? '<div class="absolute bottom-1 w-1.5 h-1.5 rounded-full bg-white"></div>' : ''}
+                    </div>
+                `;
+            }
+            html += `</div></div>`;
+            return html;
+        },
+
+        dayView: (dateStr) => {
+            const workout = DB.query("SELECT * FROM workouts WHERE date = ?", [dateStr])[0];
+            const templates = DB.query("SELECT * FROM templates");
+            
+            let html = `
+                <div class="p-4 space-y-4">
+                    <div class="flex justify-between items-center">
+                        <button onclick="router.navigate('calendar')" class="text-gray-400"><i class="fas fa-arrow-left"></i> Back</button>
+                        <h2 class="text-xl font-bold">${dateStr}</h2>
+                        <div></div>
+                    </div>
+            `;
+
+            if (workout) {
+                const exercises = DB.query("SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY ordering", [workout.id]);
+                const isDone = workout.status === 'done';
+                
+                html += `
+                    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-emerald-400">${workout.name}</h3>
+                            <span class="px-2 py-1 rounded text-xs ${isDone ? 'bg-emerald-900 text-emerald-300' : 'bg-yellow-900 text-yellow-300'}">${workout.status.toUpperCase()}</span>
+                        </div>
+                        
+                        ${!isDone ? `<button onclick="Actions.startWorkout(${workout.id})" class="w-full bg-emerald-600 py-3 rounded-lg font-bold mb-4">Start Workout Now</button>` : ''}
+                        
+                        <div class="space-y-2">
+                            ${exercises.map(ex => `<div class="p-2 bg-gray-700 rounded text-sm"><i class="fas fa-dumbbell mr-2"></i>${ex.name}</div>`).join('')}
+                        </div>
+
+                         ${isDone ? `<button onclick="Actions.resumeWorkout(${workout.id})" class="mt-4 w-full bg-gray-700 py-2 rounded text-sm">View/Edit Logs</button>` : ''}
+                         <button onclick="Actions.deleteWorkout(${workout.id})" class="mt-2 w-full text-red-400 text-sm py-2">Delete Plan</button>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="text-center py-10 text-gray-500">
+                        <i class="fas fa-bed text-4xl mb-2"></i>
+                        <p>Rest Day</p>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <h3 class="font-bold text-gray-400">Assign Template</h3>
+                        ${templates.map(t => `
+                            <button onclick="Actions.assignTemplate('${dateStr}', ${t.id})" 
+                                class="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg text-left flex justify-between items-center hover:bg-gray-750">
+                                <span>${t.name}</span>
+                                <i class="fas fa-plus text-emerald-500"></i>
+                            </button>
+                        `).join('')}
+                        ${templates.length === 0 ? '<p class="text-sm text-gray-500">No templates created yet.</p>' : ''}
+                    </div>
+                `;
+            }
+
+            html += `</div>`;
+            return html;
+        },
+
+        activeWorkout: (workoutId) => {
+            const workout = DB.query("SELECT * FROM workouts WHERE id = ?", [workoutId])[0];
+            const exercises = DB.query("SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY ordering", [workoutId]);
+
+            let html = `
+                <div class="p-4 pb-20">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-bold truncate">${workout.name}</h2>
+                        <button onclick="Actions.finishWorkout(${workoutId})" class="bg-emerald-600 px-4 py-1 rounded text-sm font-bold">Finish</button>
+                    </div>
+            `;
+
+            exercises.forEach(ex => {
+                const sets = DB.query("SELECT * FROM sets WHERE exercise_id = ?", [ex.id]);
+                html += `
+                    <div class="bg-gray-800 rounded-lg p-3 mb-4 border border-gray-700">
+                        <div class="flex justify-between mb-2">
+                            <h3 class="font-bold text-emerald-400">${ex.name}</h3>
+                            <button onclick="Actions.addSet(${ex.id})" class="text-xs bg-gray-700 px-2 py-1 rounded"><i class="fas fa-plus"></i> Set</button>
+                        </div>
+                        <div class="space-y-1">
+                            <div class="grid grid-cols-4 text-xs text-gray-500 text-center mb-1">
+                                <div>Set</div><div>kg</div><div>Reps</div><div>Done</div>
+                            </div>
+                            ${sets.map((set, idx) => `
+                                <div class="grid grid-cols-4 gap-2 items-center mb-1">
+                                    <div class="text-center text-gray-400 text-sm font-bold">${idx + 1}</div>
+                                    <input type="number" value="${set.weight}" onchange="Actions.updateSet(${set.id}, 'weight', this.value)" class="bg-gray-900 border border-gray-600 rounded p-1 text-center text-sm" placeholder="0">
+                                    <input type="number" value="${set.reps}" onchange="Actions.updateSet(${set.id}, 'reps', this.value)" class="bg-gray-900 border border-gray-600 rounded p-1 text-center text-sm" placeholder="0">
+                                    <div class="flex justify-center">
+                                        <button onclick="Actions.toggleSet(${set.id}, ${set.completed})" 
+                                            class="w-8 h-8 rounded flex items-center justify-center ${set.completed ? 'bg-emerald-600 text-white' : 'bg-gray-700 text-gray-400'}">
+                                            <i class="fas fa-check"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+
+            // Ad-hoc exercise adder
+            html += `
+                <div class="mt-4">
+                    <button onclick="Actions.addExerciseToWorkout(${workoutId})" class="w-full py-3 border-2 border-dashed border-gray-700 text-gray-500 rounded-lg hover:text-gray-300">
+                        + Add Exercise
+                    </button>
+                </div>
+            </div>`;
+            return html;
+        },
+
+        templates: () => {
+            const templates = DB.query("SELECT * FROM templates");
+            let html = `
+                <div class="p-4">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">Templates</h2>
+                        <button onclick="Actions.createTemplate()" class="bg-emerald-600 w-10 h-10 rounded-full flex items-center justify-center shadow-lg"><i class="fas fa-plus"></i></button>
+                    </div>
+                    <div class="grid gap-3">
+            `;
+            
+            templates.forEach(t => {
+                const count = DB.query("SELECT COUNT(*) as c FROM template_exercises WHERE template_id=?", [t.id])[0].c;
+                html += `
+                    <div class="bg-gray-800 p-4 rounded-lg flex justify-between items-center border border-gray-700">
+                        <div>
+                            <div class="font-bold text-lg">${t.name}</div>
+                            <div class="text-xs text-gray-500">${count} Exercises</div>
+                        </div>
+                        <button onclick="Actions.editTemplate(${t.id})" class="text-emerald-400 px-3 py-2"><i class="fas fa-edit"></i></button>
+                    </div>
+                `;
+            });
+            html += `</div></div>`;
+            return html;
+        },
+
+        editTemplate: (id) => {
+            const t = DB.query("SELECT * FROM templates WHERE id = ?", [id])[0];
+            const exercises = DB.query("SELECT * FROM template_exercises WHERE template_id = ? ORDER BY ordering", [id]);
+            
+            let html = `
+                <div class="p-4">
+                    <button onclick="router.navigate('templates')" class="mb-4 text-gray-400"><i class="fas fa-arrow-left"></i> Back</button>
+                    <input id="tmpl-name-input" value="${t.name}" onchange="DB.run('UPDATE templates SET name=? WHERE id=?', [this.value, ${id}])" 
+                        class="w-full bg-transparent text-2xl font-bold border-b border-gray-600 mb-6 focus:outline-none focus:border-emerald-500 pb-2">
+                    
+                    <div class="space-y-2 mb-4">
+                        ${exercises.map(ex => `
+                            <div class="bg-gray-800 p-3 rounded flex justify-between items-center group">
+                                <span>${ex.name}</span>
+                                <button onclick="Actions.deleteTemplateExercise(${ex.id}, ${id})" class="text-red-400 opacity-50 group-hover:opacity-100"><i class="fas fa-trash"></i></button>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <form onsubmit="event.preventDefault(); Actions.addTemplateExercise(${id}, this.exName.value); this.exName.value='';" class="flex gap-2">
+                        <input name="exName" placeholder="Add Exercise (e.g. Bench Press)" class="flex-1 bg-gray-800 rounded px-4 py-3 focus:outline-none border border-gray-700">
+                        <button type="submit" class="bg-emerald-600 px-4 rounded text-white"><i class="fas fa-plus"></i></button>
+                    </form>
+                    
+                    <button onclick="Actions.deleteTemplate(${id})" class="mt-10 w-full py-3 border border-red-900 text-red-500 rounded">Delete Template</button>
+                </div>
+            `;
+            return html;
+        }
+    };
+
+    // --- Actions & Router ---
+
+    const Actions = {
+        assignTemplate: (date, tmplId) => {
+            const t = DB.query("SELECT * FROM templates WHERE id = ?", [tmplId])[0];
+            const exercises = DB.query("SELECT * FROM template_exercises WHERE template_id = ?", [tmplId]);
+            
+            DB.run("INSERT INTO workouts (date, name, status) VALUES (?, ?, 'planned')", [date, t.name]);
+            const workoutId = DB.query("SELECT last_insert_rowid() as id")[0].id;
+            
+            exercises.forEach(ex => {
+                DB.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, ?, ?)", [workoutId, ex.name, ex.ordering]);
+            });
+            
+            router.openDay(date);
+        },
+        
+        startWorkout: (id) => {
+            DB.run("UPDATE workouts SET status = 'in_progress' WHERE id = ?", [id]);
+            router.navigate('active', id);
+        },
+
+        resumeWorkout: (id) => {
+             router.navigate('active', id);
+        },
+
+        finishWorkout: (id) => {
+            DB.run("UPDATE workouts SET status = 'done' WHERE id = ?", [id]);
+            router.navigate('calendar');
+        },
+
+        createTemplate: () => {
+            DB.run("INSERT INTO templates (name) VALUES ('New Routine')");
+            const id = DB.query("SELECT last_insert_rowid() as id")[0].id;
+            router.navigate('editTemplate', id);
+        },
+
+        addTemplateExercise: (tid, name) => {
+            if(!name) return;
+            DB.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, ?, 0)", [tid, name]);
+            router.navigate('editTemplate', tid);
+        },
+
+        deleteTemplateExercise: (eid, tid) => {
+            DB.run("DELETE FROM template_exercises WHERE id=?", [eid]);
+            router.navigate('editTemplate', tid);
+        },
+        
+        deleteTemplate: (id) => {
+             DB.run("DELETE FROM templates WHERE id=?", [id]);
+             DB.run("DELETE FROM template_exercises WHERE template_id=?", [id]);
+             router.navigate('templates');
+        },
+
+        addSet: (exId) => {
+            // Auto-populate with previous values logic could go here
+            DB.run("INSERT INTO sets (exercise_id, reps, weight) VALUES (?, 0, 0)", [exId]);
+            const workoutId = DB.query("SELECT workout_id FROM workout_exercises WHERE id=?", [exId])[0].workout_id;
+            router.navigate('active', workoutId);
+        },
+
+        updateSet: (setId, field, val) => {
+            DB.run(`UPDATE sets SET ${field} = ? WHERE id = ?`, [val, setId]);
+        },
+
+        toggleSet: (setId, current) => {
+            DB.run("UPDATE sets SET completed = ? WHERE id = ?", [current ? 0 : 1, setId]);
+            // Refresh UI without full reload for speed
+            const btn = event.currentTarget;
+            if(!current) {
+                btn.className = "w-8 h-8 rounded flex items-center justify-center bg-emerald-600 text-white";
+                btn.onclick = () => Actions.toggleSet(setId, 1);
+            } else {
+                btn.className = "w-8 h-8 rounded flex items-center justify-center bg-gray-700 text-gray-400";
+                btn.onclick = () => Actions.toggleSet(setId, 0);
+            }
+        },
+
+        addExerciseToWorkout: (wid) => {
+            const name = prompt("Exercise Name:");
+            if(name) {
+                DB.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, ?, 99)", [wid, name]);
+                router.navigate('active', wid);
+            }
+        },
+
+        deleteWorkout: (id) => {
+            if(confirm("Delete this plan?")) {
+                DB.run("DELETE FROM workouts WHERE id=?", [id]);
+                DB.run("DELETE FROM workout_exercises WHERE workout_id=?", [id]);
+                // clean up sets
+                router.navigate('calendar');
+            }
+        }
+    };
+
+    const router = {
+        container: document.getElementById('app-container'),
+        navigate: (viewName, param) => {
+            let html = '';
+            if (viewName === 'calendar') html = Views.calendar();
+            if (viewName === 'templates') html = Views.templates();
+            if (viewName === 'editTemplate') html = Views.editTemplate(param);
+            if (viewName === 'active') html = Views.activeWorkout(param);
+            if (viewName === 'stats') html = '<div class="p-10 text-center text-gray-500">Track more workouts to see stats!</div>';
+            
+            router.container.innerHTML = html;
+        },
+        openDay: (dateStr) => {
+            router.container.innerHTML = Views.dayView(dateStr);
+        }
+    };
+
+    // --- Init ---
+    DB.init().then(() => {
+        router.navigate('calendar');
+    });
+
+    </script>
+</body>
+</html>
+
