@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>FitTrack v6</title>
+    <title>FitTrack v7</title>
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Load the JS wrapper only -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
     
     <style>
@@ -26,19 +25,18 @@
 
     <!-- Header -->
     <header class="bg-gray-800 p-4 pt-safe shadow-md flex justify-between items-center z-10 shrink-0">
-        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v6</span></h1>
+        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v7</span></h1>
         <div id="db-status" class="text-xs text-yellow-500 flex items-center"><i class="fas fa-circle-notch fa-spin mr-1"></i> Init...</div>
     </header>
 
-    <!-- Error Log (Hidden unless needed) -->
+    <!-- Error Log -->
     <div id="error-log"></div>
 
     <!-- Main Content -->
     <main id="app-container" class="flex-1 overflow-y-auto relative w-full max-w-md mx-auto bg-gray-900">
         <div id="loading-view" class="flex flex-col items-center justify-center h-full text-gray-500 p-6 text-center">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-            <p class="mb-2 font-bold text-white">Downloading Engine...</p>
-            <p class="text-xs">This ensures the database runs on your specific device.</p>
+            <p class="mb-2 font-bold text-white">Loading v7...</p>
         </div>
     </main>
 
@@ -76,14 +74,14 @@
         
         async init() {
             try {
-                // 1. Manually fetch the WASM binary. This bypasses 'locateFile' issues.
+                // 1. Manually fetch the WASM binary
                 const wasmUrl = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm';
                 const wasmBinary = await fetch(wasmUrl).then(response => {
                     if (!response.ok) throw new Error("Failed to download database engine");
                     return response.arrayBuffer();
                 });
 
-                // 2. Initialize SQL.js with the binary
+                // 2. Initialize SQL.js
                 const SQL = await initSqlJs({ wasmBinary });
                 
                 // 3. Load Saved Data
@@ -93,8 +91,7 @@
                 if (buf) {
                     try {
                         this.db = new SQL.Database(new Uint8Array(buf));
-                        // Test Integrity
-                        this.db.exec("SELECT count(*) FROM templates");
+                        this.db.exec("SELECT count(*) FROM templates"); // Test Integrity
                     } catch (e) {
                         console.warn("DB Integrity check failed. Recreating.", e);
                         this.db = new SQL.Database();
@@ -105,7 +102,7 @@
                     isNew = true;
                 }
                 
-                // 4. Ensure Tables Exist (Run blindly to fix partial inits)
+                // 4. Ensure Tables Exist
                 this.initSchema(); 
                 
                 if (isNew) this.seedDemoData();
@@ -135,7 +132,6 @@
         },
 
         initSchema() {
-            // Broken down to prevent one failure stopping others
             const tables = [
                 "CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY, name TEXT);",
                 "CREATE TABLE IF NOT EXISTS template_exercises (id INTEGER PRIMARY KEY, template_id INTEGER, name TEXT, ordering INTEGER);",
@@ -150,9 +146,8 @@
             try {
                 const count = this.query("SELECT count(*) as c FROM templates")[0].c;
                 if(count > 0) return;
-
                 this.run("INSERT INTO templates (name) VALUES ('Full Body A')");
-                const tid = this.query("SELECT last_insert_rowid() as id")[0].id;
+                const tid = this.query("SELECT MAX(id) as id FROM templates")[0].id; // Use MAX(id) for safety
                 this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Squat', 1)", [tid]);
                 this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Bench Press', 2)", [tid]);
             } catch(e) { console.log("Seed error (non-fatal):", e); }
@@ -173,7 +168,6 @@
                 });
             } catch (e) {
                 console.error("Query Error:", sql, e);
-                alert("Database Error:\n" + e.message);
                 return [];
             }
         },
@@ -281,7 +275,12 @@
         },
 
         editTemplate: (id) => {
-            const t = DB.query("SELECT * FROM templates WHERE id = ?", [id])[0];
+            const res = DB.query("SELECT * FROM templates WHERE id = ?", [id]);
+            if (!res || res.length === 0) {
+                 return `<div class="p-10 text-center text-red-400">Template ID ${id} not found.<br><br><button onclick="router.navigate('templates')" class="underline">Back to List</button></div>`;
+            }
+            const t = res[0];
+            
             const exercises = DB.query("SELECT * FROM template_exercises WHERE template_id = ? ORDER BY ordering", [id]);
             let html = `<div class="p-4"><button onclick="router.navigate('templates')" class="mb-6 text-gray-400 flex items-center hover:text-white"><i class="fas fa-arrow-left mr-2"></i> Back</button><div class="mb-8"><label class="text-xs text-gray-500 uppercase font-bold tracking-wider">Template Name</label><input id="tmpl-name-input" value="${t.name}" onchange="DB.run('UPDATE templates SET name=? WHERE id=?', [this.value, ${id}])" class="w-full bg-transparent text-3xl font-bold border-b border-gray-700 py-2 text-white focus:outline-none focus:border-emerald-500 transition"></div><div class="space-y-3 mb-6">${exercises.map(ex => `<div class="bg-gray-800 p-4 rounded-xl flex justify-between items-center border border-gray-700 group"><span class="font-medium text-gray-200">${ex.name}</span><button onclick="Actions.deleteTemplateExercise(${ex.id}, ${id})" class="text-gray-600 hover:text-red-400 transition"><i class="fas fa-trash"></i></button></div>`).join('')}</div><form onsubmit="event.preventDefault(); Actions.addTemplateExercise(${id}, this.exName.value); this.exName.value='';" class="flex gap-3 mb-10"><input name="exName" placeholder="Add Exercise..." class="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-white focus:outline-none border border-gray-700 focus:border-emerald-500 transition"><button type="submit" class="bg-emerald-600 px-5 rounded-xl text-white font-bold hover:bg-emerald-500 transition"><i class="fas fa-plus"></i></button></form><button onclick="Actions.deleteTemplate(${id})" class="w-full py-4 text-red-500 text-sm font-medium hover:bg-red-900/20 rounded-xl transition">Delete Template</button></div>`;
             return html;
@@ -302,7 +301,7 @@
                         <p class="text-gray-400 text-sm mb-4">Fix "Database Error" or clear all data.</p>
                         <button onclick="Actions.hardReset()" class="w-full bg-red-900/50 border border-red-500 text-red-400 py-3 rounded-xl font-bold hover:bg-red-900 transition"><i class="fas fa-bomb mr-2"></i> Reset App & Clear Data</button>
                     </div>
-                    <div class="text-center text-gray-600 text-xs mt-10">FitTrack v6 (Manual Load)</div>
+                    <div class="text-center text-gray-600 text-xs mt-10">FitTrack v7 (Safe ID)</div>
                 </div>
             `;
         }
@@ -313,23 +312,31 @@
             const t = DB.query("SELECT * FROM templates WHERE id = ?", [tmplId])[0];
             const exercises = DB.query("SELECT * FROM template_exercises WHERE template_id = ?", [tmplId]);
             DB.run("INSERT INTO workouts (date, name, status) VALUES (?, ?, 'planned')", [date, t.name]);
-            const workoutId = DB.query("SELECT last_insert_rowid() as id")[0].id;
+            const workoutId = DB.query("SELECT MAX(id) as id FROM workouts")[0].id;
             exercises.forEach(ex => DB.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, ?, ?)", [workoutId, ex.name, ex.ordering]));
             router.openDay(date);
         },
         startWorkout: (id) => { DB.run("UPDATE workouts SET status = 'in_progress' WHERE id = ?", [id]); router.navigate('active', id); },
         resumeWorkout: (id) => { router.navigate('active', id); },
         finishWorkout: (id) => { DB.run("UPDATE workouts SET status = 'done' WHERE id = ?", [id]); router.navigate('calendar'); },
+        
         createTemplate: () => { 
             try {
                 DB.run("INSERT INTO templates (name) VALUES ('New Routine')"); 
-                const res = DB.query("SELECT last_insert_rowid() as id");
-                if(res.length > 0) router.navigate('editTemplate', res[0].id);
+                // SAFETY: Use MAX(id) to ensure we get the latest ID even if last_insert_rowid is shaky
+                const res = DB.query("SELECT MAX(id) as id FROM templates");
+                
+                if(res.length > 0 && res[0].id) {
+                    router.navigate('editTemplate', res[0].id);
+                } else {
+                    alert("Database inserted the row but could not return ID. Please refresh.");
+                }
             } catch(e) { 
                 console.error("Create Template Failed:", e);
                 alert("Could not create template.\n" + e.message); 
             }
         },
+        
         addTemplateExercise: (tid, name) => { if(!name) return; DB.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, ?, 0)", [tid, name]); router.navigate('editTemplate', tid); },
         deleteTemplateExercise: (eid, tid) => { DB.run("DELETE FROM template_exercises WHERE id=?", [eid]); router.navigate('editTemplate', tid); },
         deleteTemplate: (id) => { if(confirm("Delete template?")) { DB.run("DELETE FROM templates WHERE id=?", [id]); DB.run("DELETE FROM template_exercises WHERE template_id=?", [id]); router.navigate('templates'); } },
@@ -363,14 +370,19 @@
     const router = {
         container: document.getElementById('app-container'),
         navigate: (viewName, param) => {
-            let html = '';
-            if (viewName === 'calendar') html = Views.calendar();
-            if (viewName === 'templates') html = Views.templates();
-            if (viewName === 'editTemplate') html = Views.editTemplate(param);
-            if (viewName === 'active') html = Views.activeWorkout(param);
-            if (viewName === 'stats') html = Views.stats();
-            if (viewName === 'settings') html = Views.settings();
-            router.container.innerHTML = html;
+            try {
+                let html = '';
+                if (viewName === 'calendar') html = Views.calendar();
+                if (viewName === 'templates') html = Views.templates();
+                if (viewName === 'editTemplate') html = Views.editTemplate(param);
+                if (viewName === 'active') html = Views.activeWorkout(param);
+                if (viewName === 'stats') html = Views.stats();
+                if (viewName === 'settings') html = Views.settings();
+                router.container.innerHTML = html;
+            } catch(e) {
+                console.error("Navigation Error:", e);
+                router.container.innerHTML = `<div class="p-10 text-center text-red-500">Error loading view.<br>${e.message}</div>`;
+            }
         },
         openDay: (dateStr) => { router.container.innerHTML = Views.dayView(dateStr); }
     };
