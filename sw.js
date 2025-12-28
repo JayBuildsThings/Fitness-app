@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fittrack-v5';
+const CACHE_NAME = 'fittrack-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -35,6 +35,7 @@ self.addEventListener('fetch', (e) => {
     })
   );
 });
+
 
 
 
