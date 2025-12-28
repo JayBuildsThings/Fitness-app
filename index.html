@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>FitTrack v7</title>
+    <title>FitTrack v8</title>
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -25,7 +25,7 @@
 
     <!-- Header -->
     <header class="bg-gray-800 p-4 pt-safe shadow-md flex justify-between items-center z-10 shrink-0">
-        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v7</span></h1>
+        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v8</span></h1>
         <div id="db-status" class="text-xs text-yellow-500 flex items-center"><i class="fas fa-circle-notch fa-spin mr-1"></i> Init...</div>
     </header>
 
@@ -36,7 +36,7 @@
     <main id="app-container" class="flex-1 overflow-y-auto relative w-full max-w-md mx-auto bg-gray-900">
         <div id="loading-view" class="flex flex-col items-center justify-center h-full text-gray-500 p-6 text-center">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-            <p class="mb-2 font-bold text-white">Loading v7...</p>
+            <p class="mb-2 font-bold text-white">Loading v8...</p>
         </div>
     </main>
 
@@ -301,7 +301,7 @@
                         <p class="text-gray-400 text-sm mb-4">Fix "Database Error" or clear all data.</p>
                         <button onclick="Actions.hardReset()" class="w-full bg-red-900/50 border border-red-500 text-red-400 py-3 rounded-xl font-bold hover:bg-red-900 transition"><i class="fas fa-bomb mr-2"></i> Reset App & Clear Data</button>
                     </div>
-                    <div class="text-center text-gray-600 text-xs mt-10">FitTrack v7 (Safe ID)</div>
+                    <div class="text-center text-gray-600 text-xs mt-10">FitTrack v8 (Fixed Edit)</div>
                 </div>
             `;
         }
@@ -323,13 +323,9 @@
         createTemplate: () => { 
             try {
                 DB.run("INSERT INTO templates (name) VALUES ('New Routine')"); 
-                // SAFETY: Use MAX(id) to ensure we get the latest ID even if last_insert_rowid is shaky
                 const res = DB.query("SELECT MAX(id) as id FROM templates");
-                
                 if(res.length > 0 && res[0].id) {
                     router.navigate('editTemplate', res[0].id);
-                } else {
-                    alert("Database inserted the row but could not return ID. Please refresh.");
                 }
             } catch(e) { 
                 console.error("Create Template Failed:", e);
@@ -337,6 +333,10 @@
             }
         },
         
+        // --- THIS WAS MISSING IN v7 ---
+        editTemplate: (id) => { router.navigate('editTemplate', id); },
+        // ------------------------------
+
         addTemplateExercise: (tid, name) => { if(!name) return; DB.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, ?, 0)", [tid, name]); router.navigate('editTemplate', tid); },
         deleteTemplateExercise: (eid, tid) => { DB.run("DELETE FROM template_exercises WHERE id=?", [eid]); router.navigate('editTemplate', tid); },
         deleteTemplate: (id) => { if(confirm("Delete template?")) { DB.run("DELETE FROM templates WHERE id=?", [id]); DB.run("DELETE FROM template_exercises WHERE template_id=?", [id]); router.navigate('templates'); } },
