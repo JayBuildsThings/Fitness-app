@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>SQLite FitTrack</title>
+    <title>SQLite FitTrack v5</title>
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -23,23 +23,24 @@
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans h-dvh flex flex-col overflow-hidden">
 
+    <!-- Header -->
     <header class="bg-gray-800 p-4 pt-safe shadow-md flex justify-between items-center z-10 shrink-0">
-        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack</h1>
-        <div class="flex gap-2">
-            <button onclick="DB.nuke()" class="text-xs text-red-500 border border-red-900 px-2 py-1 rounded">Reset App</button>
-            <div id="db-status" class="text-xs text-gray-500 flex items-center">Loading...</div>
-        </div>
+        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v5</span></h1>
+        <div id="db-status" class="text-xs text-gray-500 flex items-center">Loading...</div>
     </header>
 
+    <!-- Error Log -->
     <div id="error-log" class="bg-gray-800 border-b border-red-900"></div>
 
+    <!-- Main Content -->
     <main id="app-container" class="flex-1 overflow-y-auto relative w-full max-w-md mx-auto bg-gray-900">
         <div id="loading-view" class="flex flex-col items-center justify-center h-full text-gray-500">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-            <p>Initializing Database...</p>
+            <p>Checking Database...</p>
         </div>
     </main>
 
+    <!-- Navigation -->
     <nav class="bg-gray-800 border-t border-gray-700 flex justify-around p-2 pb-safe shrink-0 z-20">
         <button onclick="router.navigate('calendar')" class="nav-btn w-full text-gray-400 hover:text-emerald-400 flex flex-col items-center py-2">
             <i class="fas fa-calendar-alt text-xl mb-1"></i>
@@ -52,6 +53,10 @@
         <button onclick="router.navigate('stats')" class="nav-btn w-full text-gray-400 hover:text-emerald-400 flex flex-col items-center py-2">
             <i class="fas fa-chart-line text-xl mb-1"></i>
             <span class="text-xs">Stats</span>
+        </button>
+        <button onclick="router.navigate('settings')" class="nav-btn w-full text-gray-400 hover:text-emerald-400 flex flex-col items-center py-2">
+            <i class="fas fa-cog text-xl mb-1"></i>
+            <span class="text-xs">Settings</span>
         </button>
     </nav>
 
@@ -74,16 +79,29 @@
                 const dataPromise = this.loadFromIDB();
                 const [SQL, buf] = await Promise.all([sqlPromise, dataPromise]);
                 
+                let isNew = false;
+
                 if (buf) {
-                    this.db = new SQL.Database(new Uint8Array(buf));
+                    try {
+                        this.db = new SQL.Database(new Uint8Array(buf));
+                        // Test query to check for corruption
+                        this.db.exec("SELECT count(*) FROM templates");
+                    } catch (e) {
+                        console.warn("Corrupt database detected. Resetting.", e);
+                        this.db = new SQL.Database();
+                        isNew = true;
+                    }
                 } else {
                     this.db = new SQL.Database();
-                    this.seedDemoData();
+                    isNew = true;
                 }
                 
-                // FIX: Always run schema init to repair broken/old databases
                 this.initSchema(); 
                 
+                if (isNew) {
+                    this.seedDemoData();
+                }
+
                 this.save();
                 document.getElementById('db-status').innerText = "Ready";
                 document.getElementById('db-status').className = "text-xs text-emerald-500 font-bold";
@@ -95,26 +113,25 @@
                     <div class="text-red-500 p-8 text-center">
                         <h3 class="font-bold">App Error</h3>
                         <p class="text-sm mt-2 mb-4 bg-gray-800 p-2 rounded text-left font-mono break-all">${err.message}</p>
-                        <button onclick="DB.nuke()" class="bg-red-600 text-white px-4 py-2 rounded">Reset Everything</button>
+                        <button onclick="Actions.hardReset()" class="bg-red-600 text-white px-4 py-2 rounded shadow-lg">Reset App Data</button>
                     </div>
                 `;
             }
         },
 
         initSchema() {
-            this.db.run(`
-                CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY, name TEXT);
-                CREATE TABLE IF NOT EXISTS template_exercises (id INTEGER PRIMARY KEY, template_id INTEGER, name TEXT, ordering INTEGER);
-                CREATE TABLE IF NOT EXISTS workouts (id INTEGER PRIMARY KEY, date TEXT, name TEXT, status TEXT, notes TEXT); 
-                CREATE TABLE IF NOT EXISTS workout_exercises (id INTEGER PRIMARY KEY, workout_id INTEGER, name TEXT, ordering INTEGER);
-                CREATE TABLE IF NOT EXISTS sets (id INTEGER PRIMARY KEY, exercise_id INTEGER, reps INTEGER, weight REAL, completed INTEGER DEFAULT 0);
-            `);
+            this.db.run("CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY, name TEXT);");
+            this.db.run("CREATE TABLE IF NOT EXISTS template_exercises (id INTEGER PRIMARY KEY, template_id INTEGER, name TEXT, ordering INTEGER);");
+            this.db.run("CREATE TABLE IF NOT EXISTS workouts (id INTEGER PRIMARY KEY, date TEXT, name TEXT, status TEXT, notes TEXT);");
+            this.db.run("CREATE TABLE IF NOT EXISTS workout_exercises (id INTEGER PRIMARY KEY, workout_id INTEGER, name TEXT, ordering INTEGER);");
+            this.db.run("CREATE TABLE IF NOT EXISTS sets (id INTEGER PRIMARY KEY, exercise_id INTEGER, reps INTEGER, weight REAL, completed INTEGER DEFAULT 0);");
         },
 
         seedDemoData() {
-            // Only runs if NEW database
             try {
-                this.initSchema(); // Ensure tables exist before seeding
+                const count = this.query("SELECT count(*) as c FROM templates")[0].c;
+                if(count > 0) return;
+
                 this.run("INSERT INTO templates (name) VALUES ('Full Body A')");
                 const tid = this.query("SELECT last_insert_rowid() as id")[0].id;
                 this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Squat', 1)", [tid]);
@@ -145,12 +162,14 @@
         },
 
         save() {
-            const data = this.db.export();
-            const request = indexedDB.open("FitTrackDB", 1);
-            request.onsuccess = e => {
-                const tx = e.target.result.transaction("store", "readwrite");
-                tx.objectStore("store").put(data, "sqlite_dump");
-            };
+            try {
+                const data = this.db.export();
+                const request = indexedDB.open("FitTrackDB", 1);
+                request.onsuccess = e => {
+                    const tx = e.target.result.transaction("store", "readwrite");
+                    tx.objectStore("store").put(data, "sqlite_dump");
+                };
+            } catch(e) { console.error("Save failed", e); }
         },
 
         async loadFromIDB() {
@@ -165,13 +184,6 @@
                 };
                 request.onerror = () => resolve(null);
             });
-        },
-
-        nuke() {
-            if(confirm("RESET APP? All history will be deleted.")) {
-                indexedDB.deleteDatabase("FitTrackDB");
-                location.reload();
-            }
         }
     };
 
@@ -183,7 +195,8 @@
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const firstDay = new Date(year, month, 1).getDay();
 
-            const workouts = DB.query(`SELECT * FROM workouts WHERE date LIKE ?`, [`${year}-${String(month+1).padStart(2,'0')}%`]);
+            let workouts = [];
+            try { workouts = DB.query(`SELECT * FROM workouts WHERE date LIKE ?`, [`${year}-${String(month+1).padStart(2,'0')}%`]); } catch(e) {}
             const workoutMap = {};
             workouts.forEach(w => workoutMap[w.date] = w);
 
@@ -262,6 +275,27 @@
              const totalWorkouts = DB.query("SELECT COUNT(*) as c FROM workouts WHERE status='done'")[0].c;
              const totalSets = DB.query("SELECT COUNT(*) as c FROM sets WHERE completed=1")[0].c;
              return `<div class="p-6"><h2 class="text-2xl font-bold mb-6">Your Stats</h2><div class="grid grid-cols-2 gap-4 mb-6"><div class="bg-gray-800 p-4 rounded-2xl border border-gray-700 text-center"><div class="text-3xl font-bold text-emerald-400 mb-1">${totalWorkouts}</div><div class="text-xs text-gray-500 uppercase">Workouts Done</div></div><div class="bg-gray-800 p-4 rounded-2xl border border-gray-700 text-center"><div class="text-3xl font-bold text-blue-400 mb-1">${totalSets}</div><div class="text-xs text-gray-500 uppercase">Sets Completed</div></div></div></div>`;
+        },
+
+        settings: () => {
+            return `
+                <div class="p-6">
+                    <h2 class="text-2xl font-bold mb-6">Settings</h2>
+                    
+                    <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700 mb-6">
+                        <h3 class="font-bold text-lg mb-2 text-white">Data Management</h3>
+                        <p class="text-gray-400 text-sm mb-4">If the app is acting buggy or you want to start over, use this button.</p>
+                        <button onclick="Actions.hardReset()" class="w-full bg-red-900/50 border border-red-500 text-red-400 py-3 rounded-xl font-bold hover:bg-red-900 transition">
+                            <i class="fas fa-bomb mr-2"></i> Reset App & Clear Data
+                        </button>
+                    </div>
+
+                    <div class="text-center text-gray-600 text-xs mt-10">
+                        FitTrack v5<br>
+                        Running on SQLite WA + IndexedDB
+                    </div>
+                </div>
+            `;
         }
     };
 
@@ -282,7 +316,7 @@
                 DB.run("INSERT INTO templates (name) VALUES ('New Routine')"); 
                 const res = DB.query("SELECT last_insert_rowid() as id");
                 if(res.length > 0) router.navigate('editTemplate', res[0].id);
-            } catch(e) { alert("Error creating template: " + e); }
+            } catch(e) { alert("Error creating template. Check Settings > Reset App.\n\n" + e); }
         },
         addTemplateExercise: (tid, name) => { if(!name) return; DB.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, ?, 0)", [tid, name]); router.navigate('editTemplate', tid); },
         deleteTemplateExercise: (eid, tid) => { DB.run("DELETE FROM template_exercises WHERE id=?", [eid]); router.navigate('editTemplate', tid); },
@@ -297,7 +331,21 @@
             else { btn.className = "w-full h-9 rounded-lg flex items-center justify-center transition shadow-sm bg-gray-700 text-gray-400 hover:bg-gray-600"; btn.onclick = () => Actions.toggleSet(setId, 0); }
         },
         addExerciseToWorkout: (wid) => { const name = prompt("Exercise Name:"); if(name) { DB.run("INSERT INTO workout_exercises (workout_id, name, ordering) VALUES (?, ?, 99)", [wid, name]); router.navigate('active', wid); } },
-        deleteWorkout: (id) => { if(confirm("Delete this plan?")) { DB.run("DELETE FROM workouts WHERE id=?", [id]); DB.run("DELETE FROM workout_exercises WHERE workout_id=?", [id]); router.navigate('calendar'); } }
+        deleteWorkout: (id) => { if(confirm("Delete this plan?")) { DB.run("DELETE FROM workouts WHERE id=?", [id]); DB.run("DELETE FROM workout_exercises WHERE workout_id=?", [id]); router.navigate('calendar'); } },
+        
+        hardReset: async () => {
+            if(confirm("Fix App?\nThis will clear all data and reset the database to factory settings.")) {
+                if('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    for(let registration of registrations) { await registration.unregister(); }
+                }
+                const keys = await caches.keys();
+                await Promise.all(keys.map(key => caches.delete(key)));
+                indexedDB.deleteDatabase("FitTrackDB");
+                alert("App Reset. Reloading...");
+                window.location.reload(true);
+            }
+        }
     };
 
     const router = {
@@ -309,6 +357,7 @@
             if (viewName === 'editTemplate') html = Views.editTemplate(param);
             if (viewName === 'active') html = Views.activeWorkout(param);
             if (viewName === 'stats') html = Views.stats();
+            if (viewName === 'settings') html = Views.settings();
             router.container.innerHTML = html;
         },
         openDay: (dateStr) => { router.container.innerHTML = Views.dayView(dateStr); }
