@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Simple Green Circle Icon for PWA -->
-  <circle cx="256" cy="256" r="256" fill="#10b981"/>
-  <!-- Optional: Simple white barbell silhouette for context -->
-  <path d="M112 208h288v96H112z" fill="#fff"/>
-  <rect x="64" y="176" width="48" height="160" rx="8" fill="#fff"/>
-  <rect x="400" y="176" width="48" height="160" rx="8" fill="#fff"/>
+  <rect width="512" height="512" fill="#000000"/>
+  <rect x="64" y="64" width="384" height="384" fill="none" stroke="#22c55e" stroke-width="32"/>
+  <rect x="128" y="232" width="256" height="48" fill="#22c55e"/>
+  <rect x="128" y="150" width="48" height="212" fill="#22c55e"/>
+  <rect x="336" y="150" width="48" height="212" fill="#22c55e"/>
 </svg>
+
 
