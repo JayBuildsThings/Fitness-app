@@ -1,12 +1,13 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>SQLite FitTrack v5</title>
+    <title>FitTrack v6</title>
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Load the JS wrapper only -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
     
     <style>
@@ -18,25 +19,26 @@
         .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
         .pt-safe { padding-top: env(safe-area-inset-top); }
         .h-dvh { height: 100vh; height: 100dvh; }
-        #error-log { font-family: monospace; color: #f87171; font-size: 12px; padding: 10px; display: none; }
+        #error-log { font-family: monospace; color: #f87171; font-size: 11px; padding: 10px; display: none; background: #000; border-bottom: 1px solid #333; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans h-dvh flex flex-col overflow-hidden">
 
     <!-- Header -->
     <header class="bg-gray-800 p-4 pt-safe shadow-md flex justify-between items-center z-10 shrink-0">
-        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v5</span></h1>
-        <div id="db-status" class="text-xs text-gray-500 flex items-center">Loading...</div>
+        <h1 class="text-xl font-bold text-emerald-400"><i class="fas fa-dumbbell mr-2"></i>FitTrack <span class="text-xs opacity-50 font-normal">v6</span></h1>
+        <div id="db-status" class="text-xs text-yellow-500 flex items-center"><i class="fas fa-circle-notch fa-spin mr-1"></i> Init...</div>
     </header>
 
-    <!-- Error Log -->
-    <div id="error-log" class="bg-gray-800 border-b border-red-900"></div>
+    <!-- Error Log (Hidden unless needed) -->
+    <div id="error-log"></div>
 
     <!-- Main Content -->
     <main id="app-container" class="flex-1 overflow-y-auto relative w-full max-w-md mx-auto bg-gray-900">
-        <div id="loading-view" class="flex flex-col items-center justify-center h-full text-gray-500">
+        <div id="loading-view" class="flex flex-col items-center justify-center h-full text-gray-500 p-6 text-center">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-            <p>Checking Database...</p>
+            <p class="mb-2 font-bold text-white">Downloading Engine...</p>
+            <p class="text-xs">This ensures the database runs on your specific device.</p>
         </div>
     </main>
 
@@ -61,10 +63,11 @@
     </nav>
 
     <script>
+    // Robust Error Logger
     window.onerror = function(msg, url, line) {
         const errDiv = document.getElementById('error-log');
         errDiv.style.display = 'block';
-        errDiv.innerHTML += `<div>Error: ${msg} (Line ${line})</div>`;
+        errDiv.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg} (Line ${line})</div>`;
         return false;
     };
 
@@ -73,21 +76,27 @@
         
         async init() {
             try {
-                const sqlPromise = initSqlJs({
-                    locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+                // 1. Manually fetch the WASM binary. This bypasses 'locateFile' issues.
+                const wasmUrl = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm';
+                const wasmBinary = await fetch(wasmUrl).then(response => {
+                    if (!response.ok) throw new Error("Failed to download database engine");
+                    return response.arrayBuffer();
                 });
-                const dataPromise = this.loadFromIDB();
-                const [SQL, buf] = await Promise.all([sqlPromise, dataPromise]);
+
+                // 2. Initialize SQL.js with the binary
+                const SQL = await initSqlJs({ wasmBinary });
+                
+                // 3. Load Saved Data
+                const buf = await this.loadFromIDB();
                 
                 let isNew = false;
-
                 if (buf) {
                     try {
                         this.db = new SQL.Database(new Uint8Array(buf));
-                        // Test query to check for corruption
+                        // Test Integrity
                         this.db.exec("SELECT count(*) FROM templates");
                     } catch (e) {
-                        console.warn("Corrupt database detected. Resetting.", e);
+                        console.warn("DB Integrity check failed. Recreating.", e);
                         this.db = new SQL.Database();
                         isNew = true;
                     }
@@ -96,35 +105,45 @@
                     isNew = true;
                 }
                 
+                // 4. Ensure Tables Exist (Run blindly to fix partial inits)
                 this.initSchema(); 
                 
-                if (isNew) {
-                    this.seedDemoData();
-                }
+                if (isNew) this.seedDemoData();
 
                 this.save();
-                document.getElementById('db-status').innerText = "Ready";
-                document.getElementById('db-status').className = "text-xs text-emerald-500 font-bold";
+                this.updateStatus("Ready", "text-emerald-500");
                 router.navigate('calendar');
 
             } catch (err) {
                 console.error(err);
+                this.updateStatus("Error", "text-red-500");
                 document.getElementById('loading-view').innerHTML = `
-                    <div class="text-red-500 p-8 text-center">
-                        <h3 class="font-bold">App Error</h3>
-                        <p class="text-sm mt-2 mb-4 bg-gray-800 p-2 rounded text-left font-mono break-all">${err.message}</p>
-                        <button onclick="Actions.hardReset()" class="bg-red-600 text-white px-4 py-2 rounded shadow-lg">Reset App Data</button>
+                    <div class="text-red-500 p-6 text-center">
+                        <i class="fas fa-bug text-4xl mb-4"></i>
+                        <h3 class="font-bold">Initialization Failed</h3>
+                        <p class="text-xs mt-2 mb-4 bg-gray-800 p-2 rounded text-left font-mono break-all border border-red-900">${err.message}</p>
+                        <button onclick="Actions.hardReset()" class="bg-red-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg w-full">Reset App Data</button>
                     </div>
                 `;
             }
         },
 
+        updateStatus(text, colorClass) {
+            const el = document.getElementById('db-status');
+            el.innerHTML = text;
+            el.className = `text-xs font-bold ${colorClass}`;
+        },
+
         initSchema() {
-            this.db.run("CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY, name TEXT);");
-            this.db.run("CREATE TABLE IF NOT EXISTS template_exercises (id INTEGER PRIMARY KEY, template_id INTEGER, name TEXT, ordering INTEGER);");
-            this.db.run("CREATE TABLE IF NOT EXISTS workouts (id INTEGER PRIMARY KEY, date TEXT, name TEXT, status TEXT, notes TEXT);");
-            this.db.run("CREATE TABLE IF NOT EXISTS workout_exercises (id INTEGER PRIMARY KEY, workout_id INTEGER, name TEXT, ordering INTEGER);");
-            this.db.run("CREATE TABLE IF NOT EXISTS sets (id INTEGER PRIMARY KEY, exercise_id INTEGER, reps INTEGER, weight REAL, completed INTEGER DEFAULT 0);");
+            // Broken down to prevent one failure stopping others
+            const tables = [
+                "CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY, name TEXT);",
+                "CREATE TABLE IF NOT EXISTS template_exercises (id INTEGER PRIMARY KEY, template_id INTEGER, name TEXT, ordering INTEGER);",
+                "CREATE TABLE IF NOT EXISTS workouts (id INTEGER PRIMARY KEY, date TEXT, name TEXT, status TEXT, notes TEXT);",
+                "CREATE TABLE IF NOT EXISTS workout_exercises (id INTEGER PRIMARY KEY, workout_id INTEGER, name TEXT, ordering INTEGER);",
+                "CREATE TABLE IF NOT EXISTS sets (id INTEGER PRIMARY KEY, exercise_id INTEGER, reps INTEGER, weight REAL, completed INTEGER DEFAULT 0);"
+            ];
+            tables.forEach(sql => this.db.run(sql));
         },
 
         seedDemoData() {
@@ -136,29 +155,27 @@
                 const tid = this.query("SELECT last_insert_rowid() as id")[0].id;
                 this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Squat', 1)", [tid]);
                 this.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, 'Bench Press', 2)", [tid]);
-            } catch(e) { console.log("Seeding skipped", e); }
+            } catch(e) { console.log("Seed error (non-fatal):", e); }
         },
 
-        exec(sql, params=[]) {
-            const res = this.db.exec(sql, params);
-            this.save();
-            return res;
-        },
-
-        run(sql, params=[]) {
-            this.db.run(sql, params);
-            this.save();
-        },
+        exec(sql, params=[]) { return this.db.exec(sql, params); },
+        run(sql, params=[]) { this.db.run(sql, params); this.save(); },
 
         query(sql, params=[]) {
-            const res = this.db.exec(sql, params);
-            if (!res.length) return [];
-            const columns = res[0].columns;
-            return res[0].values.map(row => {
-                let obj = {};
-                columns.forEach((col, i) => obj[col] = row[i]);
-                return obj;
-            });
+            try {
+                const res = this.db.exec(sql, params);
+                if (!res.length) return [];
+                const columns = res[0].columns;
+                return res[0].values.map(row => {
+                    let obj = {};
+                    columns.forEach((col, i) => obj[col] = row[i]);
+                    return obj;
+                });
+            } catch (e) {
+                console.error("Query Error:", sql, e);
+                alert("Database Error:\n" + e.message);
+                return [];
+            }
         },
 
         save() {
@@ -169,7 +186,7 @@
                     const tx = e.target.result.transaction("store", "readwrite");
                     tx.objectStore("store").put(data, "sqlite_dump");
                 };
-            } catch(e) { console.error("Save failed", e); }
+            } catch(e) { console.warn("Save skipped:", e); }
         },
 
         async loadFromIDB() {
@@ -195,8 +212,7 @@
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const firstDay = new Date(year, month, 1).getDay();
 
-            let workouts = [];
-            try { workouts = DB.query(`SELECT * FROM workouts WHERE date LIKE ?`, [`${year}-${String(month+1).padStart(2,'0')}%`]); } catch(e) {}
+            let workouts = DB.query(`SELECT * FROM workouts WHERE date LIKE ?`, [`${year}-${String(month+1).padStart(2,'0')}%`]);
             const workoutMap = {};
             workouts.forEach(w => workoutMap[w.date] = w);
 
@@ -281,19 +297,12 @@
             return `
                 <div class="p-6">
                     <h2 class="text-2xl font-bold mb-6">Settings</h2>
-                    
                     <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700 mb-6">
                         <h3 class="font-bold text-lg mb-2 text-white">Data Management</h3>
-                        <p class="text-gray-400 text-sm mb-4">If the app is acting buggy or you want to start over, use this button.</p>
-                        <button onclick="Actions.hardReset()" class="w-full bg-red-900/50 border border-red-500 text-red-400 py-3 rounded-xl font-bold hover:bg-red-900 transition">
-                            <i class="fas fa-bomb mr-2"></i> Reset App & Clear Data
-                        </button>
+                        <p class="text-gray-400 text-sm mb-4">Fix "Database Error" or clear all data.</p>
+                        <button onclick="Actions.hardReset()" class="w-full bg-red-900/50 border border-red-500 text-red-400 py-3 rounded-xl font-bold hover:bg-red-900 transition"><i class="fas fa-bomb mr-2"></i> Reset App & Clear Data</button>
                     </div>
-
-                    <div class="text-center text-gray-600 text-xs mt-10">
-                        FitTrack v5<br>
-                        Running on SQLite WA + IndexedDB
-                    </div>
+                    <div class="text-center text-gray-600 text-xs mt-10">FitTrack v6 (Manual Load)</div>
                 </div>
             `;
         }
@@ -316,7 +325,10 @@
                 DB.run("INSERT INTO templates (name) VALUES ('New Routine')"); 
                 const res = DB.query("SELECT last_insert_rowid() as id");
                 if(res.length > 0) router.navigate('editTemplate', res[0].id);
-            } catch(e) { alert("Error creating template. Check Settings > Reset App.\n\n" + e); }
+            } catch(e) { 
+                console.error("Create Template Failed:", e);
+                alert("Could not create template.\n" + e.message); 
+            }
         },
         addTemplateExercise: (tid, name) => { if(!name) return; DB.run("INSERT INTO template_exercises (template_id, name, ordering) VALUES (?, ?, 0)", [tid, name]); router.navigate('editTemplate', tid); },
         deleteTemplateExercise: (eid, tid) => { DB.run("DELETE FROM template_exercises WHERE id=?", [eid]); router.navigate('editTemplate', tid); },
